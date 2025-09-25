@@ -83,4 +83,4 @@ internal fun HttpsUrl.wellKnownUrl(wellKnownPath: String): Url {
     return URLBuilder(issuer).apply { path(pathSegment) }.build()
 }
 
-private fun String.removePrefixAndSuffix(s: CharSequence): String = removePrefix(s).removeSuffix(s)
+  fun String.removePrefixAndSuffix(s: CharSequence): String = removePrefix(s).removeSuffix(s)
