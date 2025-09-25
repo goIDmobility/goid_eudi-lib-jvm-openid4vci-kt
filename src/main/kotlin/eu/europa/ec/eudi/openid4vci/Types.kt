@@ -169,7 +169,7 @@ value class AuthorizationCode(val code: String) {
 @JvmInline
 value class CNonce(val value: String) : java.io.Serializable {
     init {
-        require(value.isNotEmpty()) { "Value cannot be empty" }
+        value.requireNotEmpty()
     }
     override fun toString(): String = value
 }
@@ -182,7 +182,7 @@ value class CNonce(val value: String) : java.io.Serializable {
 @JvmInline
 value class TransactionId(val value: String) {
     init {
-        require(value.isNotEmpty()) { "Value cannot be empty" }
+        value.requireNotEmpty()
     }
     override fun toString(): String = value
 }
@@ -195,7 +195,7 @@ value class TransactionId(val value: String) {
 @JvmInline
 value class NotificationId(val value: String) {
     init {
-        require(value.isNotEmpty()) { "Value cannot be empty" }
+        value.requireNotEmpty()
     }
     override fun toString(): String = value
 }
@@ -337,4 +337,8 @@ sealed interface IssuerTrust {
     }
 
     data class ByCertificateChain(val certificateChainTrust: CertificateChainTrust) : IssuerTrust
+}
+
+private fun String.requireNotEmpty() {
+    require(isNotEmpty()) { "Value cannot be empty" }
 }
