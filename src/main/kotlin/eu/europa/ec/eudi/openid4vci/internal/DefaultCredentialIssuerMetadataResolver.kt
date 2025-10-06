@@ -21,7 +21,6 @@ import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
-import java.net.URL
 
 internal class DefaultCredentialIssuerMetadataResolver(
     private val httpClient: HttpClient,
@@ -31,14 +30,9 @@ internal class DefaultCredentialIssuerMetadataResolver(
         issuer: CredentialIssuerId,
         policy: IssuerMetadataPolicy,
     ): Result<CredentialIssuerMetadata> = runCatching {
-        val wellKnownUrl = issuer.wellKnown()
+        val wellKnownUrl = issuer.wellKnownUrl("/.well-known/openid-credential-issuer")
         val json = try {
-           var value = httpClient.get(wellKnownUrl).body<String>()
-            if(isNotJson(value)) {
-                val httpUrl = wellKnownUrl(issuer.value.value, "/.well-known/openid-credential-issuer")
-                  value = httpClient.get(httpUrl).body<String>()
-            }
-            value
+          httpClient.get(wellKnownUrl).body<String>()
         } catch (t: Throwable) {
             throw CredentialIssuerMetadataError.UnableToFetchCredentialIssuerMetadata(t)
         }
@@ -61,8 +55,8 @@ fun isNotJson(input: String): Boolean {
     }
 }
 
-private fun  wellKnownUrl(url: URL, wellKnownPath: String): Url {
-    val issuer = Url(url.toString())
+private fun CredentialIssuerId.wellKnownUrl(wellKnownPath: String): Url {
+    val issuer = Url(this.value.value.toString())
     val pathSegment = buildString {
         append("/${wellKnownPath.removePrefixAndSuffix("/")}")
         val joinedSegments = issuer.segments.joinToString(separator = "/")
@@ -75,8 +69,4 @@ private fun  wellKnownUrl(url: URL, wellKnownPath: String): Url {
     return URLBuilder(issuer).apply { path(pathSegment) }.build()
 }
 
-private fun CredentialIssuerId.wellKnown() = URLBuilder(Url(value.value.toURI()))
-    .appendPathSegments("/.well-known/openid-credential-issuer", encodeSlash = false)
-    .build()
-    .toURI()
-    .toURL()
+
