@@ -21,7 +21,7 @@ import kotlinx.serialization.SerialName
 import java.io.Serializable
 import java.net.URI
 import java.net.URL
-import java.util.Locale
+import java.util.*
 
 /**
  * Cryptographic Binding Methods for issued Credentials.
@@ -57,7 +57,9 @@ sealed interface CryptographicBindingMethod : Serializable {
  * Proof types supported by a Credential Issuer.
  */
 enum class ProofType : Serializable {
-    JWT, LDP_VP, ATTESTATION,
+    JWT,
+    DI_VP,
+    ATTESTATION,
 }
 
 sealed interface ProofTypeMeta : Serializable {
@@ -119,7 +121,6 @@ sealed interface KeyAttestationRequirement {
 
         companion object
     }
-
     companion object {
         val RequiredNoConstraints: Required = Required(null, null)
     }
@@ -147,8 +148,7 @@ value class ProofTypesSupported private constructor(val values: Set<ProofTypeMet
     companion object {
         val Empty: ProofTypesSupported = ProofTypesSupported(emptySet())
         operator fun invoke(values: Set<ProofTypeMeta>): ProofTypesSupported {
-            require(
-                values.groupBy(ProofTypeMeta::type).all { (_, instances) -> instances.size == 1 }) {
+            require(values.groupBy(ProofTypeMeta::type).all { (_, instances) -> instances.size == 1 }) {
                 "Multiple instance of the same proof type are not allowed"
             }
             return ProofTypesSupported(values)
@@ -180,8 +180,10 @@ data class Display(
     ) : Serializable
 }
 
-@kotlinx.serialization.Serializable
-data class CredentialDefinition(@SerialName("type") val type: List<String>)
+data class CredentialMetadata(
+    val display: List<Display>? = emptyList(),
+    val claims: List<Claim>? = emptyList(),
+)
 
 /**
  * Credentials supported by an Issuer.
@@ -192,6 +194,12 @@ sealed interface CredentialConfiguration : Serializable {
     val credentialSigningAlgorithmsSupported: List<String>
     val proofTypesSupported: ProofTypesSupported
     val credentialMetadata: CredentialMetadata?
+
+    val display: List<Display>?
+
+    val claims: List<Claim>?
+
+
 }
 
 /**
@@ -210,7 +218,8 @@ data class Claim(
     @kotlinx.serialization.Serializable
     data class Display(
         @SerialName("name") val name: String? = null,
-        @kotlinx.serialization.Serializable(LocaleSerializer::class) @SerialName("locale") val locale: Locale? = null,
+        @kotlinx.serialization.Serializable(LocaleSerializer::class)
+        @SerialName("locale") val locale: Locale? = null,
     ) : Serializable
 }
 
@@ -230,7 +239,21 @@ data class MsoMdocCredential(
     override val credentialMetadata: CredentialMetadata?,
     val docType: String,
     val format: String,
-    override val claims: List<Claim> = emptyList(),
+    override val display: List<Display>?,
+    override val claims: List<Claim>?,
+
+) : CredentialConfiguration
+
+data class SdJwtVcCredential(
+    override val scope: String? = null,
+    override val cryptographicBindingMethodsSupported: List<CryptographicBindingMethod> = emptyList(),
+    override val credentialSigningAlgorithmsSupported: List<String> = emptyList(),
+    override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
+    override val credentialMetadata: CredentialMetadata?,
+    val type: String,
+    val format: String,
+    override val display: List<Display>?,
+    override val claims: List<Claim>?,
 ) : CredentialConfiguration
 
 data class W3CVCDMSdJwtCredential(
@@ -242,24 +265,18 @@ data class W3CVCDMSdJwtCredential(
     val type: String,
     val format: String,
     override val claims: List<Claim> = emptyList(),
-    val credentialDefinition: CredentialDefinition?
-) : CredentialConfiguration
-
-data class SdJwtDCCredential(
-    override val scope: String? = null,
-    override val cryptographicBindingMethodsSupported: List<CryptographicBindingMethod> = emptyList(),
-    override val credentialSigningAlgorithmsSupported: List<String> = emptyList(),
-    override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
-    override val display: List<Display> = emptyList(),
-    val type: String,
-    val format: String,
-    override val claims: List<Claim> = emptyList(),
+    val credentialDefinition:  CredentialDefinition?,
+    override val display: List<Display>?
 ) : CredentialConfiguration
 
 data class W3CJsonLdCredentialDefinition(
     val context: List<URL>,
     val type: List<String>,
 )
+
+@kotlinx.serialization.Serializable
+data class CredentialDefinition(@SerialName("type") val type: List<String>)
+
 
 /**
  * The data of a W3C Verifiable Credential issued as using Data Integrity and JSON-LD.
@@ -271,6 +288,8 @@ data class W3CJsonLdDataIntegrityCredential(
     override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
     override val credentialMetadata: CredentialMetadata?,
     val credentialDefinition: W3CJsonLdCredentialDefinition,
+    override val display: List<Display>?,
+    override val claims: List<Claim>?,
 ) : CredentialConfiguration
 
 /**
@@ -283,6 +302,8 @@ data class W3CJsonLdSignedJwtCredential(
     override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
     override val credentialMetadata: CredentialMetadata?,
     val credentialDefinition: W3CJsonLdCredentialDefinition,
+    override val display: List<Display>?,
+    override val claims: List<Claim>?,
 ) : CredentialConfiguration
 
 /**
@@ -295,6 +316,8 @@ data class W3CSignedJwtCredential(
     override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
     override val credentialMetadata: CredentialMetadata?,
     val credentialDefinition: CredentialDefinition,
+    override val display: List<Display>?,
+    override val claims: List<Claim>?,
 ) : CredentialConfiguration {
 
     data class CredentialDefinition(

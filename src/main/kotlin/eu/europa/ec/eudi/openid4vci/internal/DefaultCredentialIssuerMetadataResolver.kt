@@ -58,7 +58,7 @@ internal class DefaultCredentialIssuerMetadataResolver(
         }
 
 
-        CredentialIssuerMetadataJsonParser.parseMetaData(json, issuer, policy)
+        CredentialIssuerMetadataJsonParser.parseMetaData(json, issuer)
     }
 }
 
