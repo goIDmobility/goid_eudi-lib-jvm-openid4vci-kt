@@ -70,8 +70,8 @@ sealed interface ProofTypeMeta : Serializable {
         }
     }
 
-    data object LdpVp : ProofTypeMeta {
-        private fun readResolve(): Any = LdpVp
+    data object DiVp : ProofTypeMeta {
+        private fun readResolve(): Any = DiVp
     }
 
     data class Attestation(
@@ -127,9 +127,16 @@ sealed interface KeyAttestationRequirement {
 
 fun ProofTypeMeta.type(): ProofType? = when (this) {
     is ProofTypeMeta.Jwt -> ProofType.JWT
-    is ProofTypeMeta.LdpVp -> ProofType.LDP_VP
+    is ProofTypeMeta.DiVp -> ProofType.DI_VP
     is ProofTypeMeta.Attestation -> ProofType.ATTESTATION
     is ProofTypeMeta.Unsupported -> null
+}
+
+fun ProofTypeMeta.algorithms(): List<JWSAlgorithm> = when (this) {
+    is ProofTypeMeta.Jwt -> algorithms
+    is ProofTypeMeta.Attestation -> algorithms
+    is ProofTypeMeta.DiVp -> emptyList()
+    is ProofTypeMeta.Unsupported -> emptyList()
 }
 
 @JvmInline
@@ -184,8 +191,7 @@ sealed interface CredentialConfiguration : Serializable {
     val cryptographicBindingMethodsSupported: List<CryptographicBindingMethod>
     val credentialSigningAlgorithmsSupported: List<String>
     val proofTypesSupported: ProofTypesSupported
-    val display: List<Display>
-    val claims: List<Claim>?
+    val credentialMetadata: CredentialMetadata?
 }
 
 /**
@@ -221,7 +227,7 @@ data class MsoMdocCredential(
     val isoCredentialCurvesSupported: List<CoseCurve> = emptyList(),
     val isoPolicy: MsoMdocPolicy?,
     override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
-    override val display: List<Display> = emptyList(),
+    override val credentialMetadata: CredentialMetadata?,
     val docType: String,
     val format: String,
     override val claims: List<Claim> = emptyList(),
@@ -232,7 +238,7 @@ data class W3CVCDMSdJwtCredential(
     override val cryptographicBindingMethodsSupported: List<CryptographicBindingMethod> = emptyList(),
     override val credentialSigningAlgorithmsSupported: List<String> = emptyList(),
     override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
-    override val display: List<Display> = emptyList(),
+    override val credentialMetadata: CredentialMetadata?,
     val type: String,
     val format: String,
     override val claims: List<Claim> = emptyList(),
@@ -263,9 +269,8 @@ data class W3CJsonLdDataIntegrityCredential(
     override val cryptographicBindingMethodsSupported: List<CryptographicBindingMethod> = emptyList(),
     override val credentialSigningAlgorithmsSupported: List<String> = emptyList(),
     override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
-    override val display: List<Display> = emptyList(),
+    override val credentialMetadata: CredentialMetadata?,
     val credentialDefinition: W3CJsonLdCredentialDefinition,
-    override val claims: List<Claim> = emptyList(),
 ) : CredentialConfiguration
 
 /**
@@ -276,9 +281,8 @@ data class W3CJsonLdSignedJwtCredential(
     override val cryptographicBindingMethodsSupported: List<CryptographicBindingMethod> = emptyList(),
     override val credentialSigningAlgorithmsSupported: List<String> = emptyList(),
     override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
-    override val display: List<Display> = emptyList(),
+    override val credentialMetadata: CredentialMetadata?,
     val credentialDefinition: W3CJsonLdCredentialDefinition,
-    override val claims: List<Claim> = emptyList(),
 ) : CredentialConfiguration
 
 /**
@@ -289,9 +293,8 @@ data class W3CSignedJwtCredential(
     override val cryptographicBindingMethodsSupported: List<CryptographicBindingMethod> = emptyList(),
     override val credentialSigningAlgorithmsSupported: List<String> = emptyList(),
     override val proofTypesSupported: ProofTypesSupported = ProofTypesSupported.Empty,
-    override val display: List<Display> = emptyList(),
+    override val credentialMetadata: CredentialMetadata?,
     val credentialDefinition: CredentialDefinition,
-    override val claims: List<Claim> = emptyList(),
 ) : CredentialConfiguration {
 
     data class CredentialDefinition(

@@ -17,17 +17,16 @@ package eu.europa.ec.eudi.openid4vci.examples
 
 import com.nimbusds.jose.jwk.Curve
 import eu.europa.ec.eudi.openid4vci.*
-import eu.europa.ec.eudi.openid4vci.CryptoGenerator.proofsSpecForEcKeys
+import eu.europa.ec.eudi.openid4vci.CryptoGenerator.noKeyAttestationJwtProofsSpec
 import eu.europa.ec.eudi.openid4vci.internal.ensure
 import kotlinx.coroutines.runBlocking
 import java.net.URI
 
 fun main(): Unit = runBlocking {
     val vciConfig = OpenId4VCIConfig(
-        client = Client.Public("218232426"),
+        clientAuthentication = ClientAuthentication.None("218232426"),
         authFlowRedirectionURI = URI.create("urn:ietf:wg:oauth:2.0:oob"),
-        keyGenerationConfig = KeyGenerationConfig(Curve.P_256, 2048),
-        credentialResponseEncryptionPolicy = CredentialResponseEncryptionPolicy.SUPPORTED,
+        encryptionSupportConfig = EncryptionSupportConfig(Curve.P_256, 2048, CredentialResponseEncryptionPolicy.SUPPORTED),
     )
     val credentialOfferUrl =
         "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Ftrial.authlete.net" +
@@ -75,7 +74,7 @@ private suspend fun submit(
     with(issuer) {
         val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
         val (newAuthorized, outcome) =
-            authorized.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+            authorized.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
 
         return when (outcome) {
             is SubmissionOutcome.Success -> newAuthorized to outcome.credentials

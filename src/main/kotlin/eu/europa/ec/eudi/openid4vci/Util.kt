@@ -15,20 +15,14 @@
  */
 package eu.europa.ec.eudi.openid4vci
 
-/**
- * [OpenID for Verifiable Credential Issuance](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0-15.html)
- */
-object OpenId4VCISpec {
+import kotlinx.coroutines.CancellationException
 
-    const val JWT_PROOF_TYPE = "openid4vci-proof+jwt"
-
-    const val JOSE_HEADER_KEY_ID = "kid"
-    const val JOSE_HEADER_JWK = "jwk"
-    const val JOSE_HEADER_X5C = "x5c"
-    const val JOSE_HEADER_KEY_ATTESTATION = "key_attestation"
-
-    const val KEY_ATTESTATION_JWT_TYPE = "keyattestation+jwt"
-    const val KEY_ATTESTATION_ATTESTED_KEYS = "attested_keys"
-    const val KEY_ATTESTATION_KEY_STORAGE = "key_storage"
-    const val KEY_ATTESTATION_USER_AUTHENTICATION = "user_authentication"
+internal inline fun <R> runCatchingCancellable(block: () -> R): Result<R> {
+    return try {
+        Result.success(block())
+    } catch (ce: CancellationException) {
+        throw ce
+    } catch (e: Throwable) {
+        Result.failure(e)
+    }
 }

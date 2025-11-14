@@ -18,6 +18,7 @@ package eu.europa.ec.eudi.openid4vci
 import eu.europa.ec.eudi.openid4vci.CredentialIssuanceError.IssuerDoesNotSupportDeferredIssuance
 import eu.europa.ec.eudi.openid4vci.internal.RefreshAccessToken
 import eu.europa.ec.eudi.openid4vci.internal.http.DeferredEndPointClient
+import kotlin.time.Duration
 
 sealed interface DeferredCredentialQueryOutcome : java.io.Serializable {
 
@@ -27,8 +28,13 @@ sealed interface DeferredCredentialQueryOutcome : java.io.Serializable {
     ) : DeferredCredentialQueryOutcome
 
     data class IssuancePending(
-        val interval: Long? = null,
-    ) : DeferredCredentialQueryOutcome
+        val transactionId: TransactionId,
+        val interval: Duration,
+    ) : DeferredCredentialQueryOutcome {
+        init {
+            require(interval.isPositive()) { "interval must be positive" }
+        }
+    }
 
     data class Errored(
         val error: String,
@@ -65,18 +71,18 @@ fun interface QueryForDeferredCredential {
          *
          * @param refreshAccessToken the ability to refresh the [AuthorizedRequest]
          * @param deferredEndPointClient client of the deferred endpoint
-         * @param responseEncryptionSpec the credential response encryption specification
+         * @param exchangeEncryptionSpecification encryption specifications for encrypted request and response
          * that has been sent to the credential issuer
          */
         internal operator fun invoke(
             refreshAccessToken: RefreshAccessToken,
             deferredEndPointClient: DeferredEndPointClient,
-            responseEncryptionSpec: IssuanceResponseEncryptionSpec?,
+            exchangeEncryptionSpecification: ExchangeEncryptionSpecification,
         ): QueryForDeferredCredential = object : QueryForDeferredCredential {
 
             override suspend fun AuthorizedRequest.queryForDeferredCredential(
                 transactionId: TransactionId,
-            ): Result<AuthorizedRequestAnd<DeferredCredentialQueryOutcome>> = runCatching {
+            ): Result<AuthorizedRequestAnd<DeferredCredentialQueryOutcome>> = runCatchingCancellable {
                 val refreshed = refreshIfNeeded(this)
                 val (outcome, newResourceServerDpopNonce) = placeDeferredCredentialRequest(refreshed, transactionId)
                 refreshed.withResourceServerDpopNonce(newResourceServerDpopNonce) to outcome
@@ -95,7 +101,7 @@ fun interface QueryForDeferredCredential {
                     authorizedRequest.accessToken,
                     authorizedRequest.resourceServerDpopNonce,
                     transactionId,
-                    responseEncryptionSpec,
+                    exchangeEncryptionSpecification,
                 ).getOrThrow()
         }
     }

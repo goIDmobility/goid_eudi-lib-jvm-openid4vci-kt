@@ -15,12 +15,28 @@
  */
 package eu.europa.ec.eudi.openid4vci.internal
 
+import com.nimbusds.jose.JOSEObjectType
+import com.nimbusds.jose.jwk.AsymmetricJWK
+import com.nimbusds.jose.jwk.JWK
+import com.nimbusds.jose.proc.DefaultJOSEObjectTypeVerifier
+import com.nimbusds.jose.proc.JWSKeySelector
+import com.nimbusds.jose.proc.SecurityContext
+import com.nimbusds.jose.proc.SingleKeyJWSKeySelector
+import com.nimbusds.jose.util.JSONObjectUtils
+import com.nimbusds.jose.util.X509CertChainUtils
+import com.nimbusds.jwt.JWTClaimsSet
+import com.nimbusds.jwt.SignedJWT
+import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier
+import com.nimbusds.jwt.proc.DefaultJWTProcessor
 import eu.europa.ec.eudi.openid4vci.*
 import eu.europa.ec.eudi.openid4vci.internal.http.CredentialIssuerMetadataJsonParser
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
+
+private val CONTENT_TYPE_APPLICATION_JWT = ContentType.parse("application/jwt")
 
 internal class DefaultCredentialIssuerMetadataResolver(
     private val httpClient: HttpClient,

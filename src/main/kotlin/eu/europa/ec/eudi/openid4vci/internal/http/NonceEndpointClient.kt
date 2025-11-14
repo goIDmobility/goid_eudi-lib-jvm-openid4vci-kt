@@ -15,9 +15,10 @@
  */
 package eu.europa.ec.eudi.openid4vci.internal.http
 
-import eu.europa.ec.eudi.openid4vci.CNonce
 import eu.europa.ec.eudi.openid4vci.CredentialIssuanceError
 import eu.europa.ec.eudi.openid4vci.CredentialIssuerEndpoint
+import eu.europa.ec.eudi.openid4vci.Nonce
+import eu.europa.ec.eudi.openid4vci.runCatchingCancellable
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
@@ -30,22 +31,24 @@ data class CNonceResponse(
     @SerialName("c_nonce") val cNonce: String,
 )
 
+internal data class CNonceAndDPoPNonce(val cnonce: Nonce, val dpopNonce: Nonce?)
+
 internal class NonceEndpointClient(
     private val nonceEndpoint: CredentialIssuerEndpoint,
     private val httpClient: HttpClient,
 ) {
 
-    suspend fun getNonce(): Result<CNonce> =
-        runCatching {
+    suspend fun getNonce(): Result<CNonceAndDPoPNonce> =
+        runCatchingCancellable {
             requestNonce()
         }
 
-    private suspend fun requestNonce(): CNonce {
+    private suspend fun requestNonce(): CNonceAndDPoPNonce {
         val url = nonceEndpoint.value
         val response = httpClient.post(url)
         return if (response.status.isSuccess()) {
             val cNonceResponse = response.body<CNonceResponse>()
-            CNonce(cNonceResponse.cNonce)
+            CNonceAndDPoPNonce(Nonce(cNonceResponse.cNonce), response.dpopNonce())
         } else {
             throw CredentialIssuanceError.CNonceRequestFailed("Nonce request failed")
         }

@@ -17,13 +17,15 @@ package eu.europa.ec.eudi.openid4vci
 
 import com.nimbusds.jose.JWSObject
 import com.nimbusds.jose.jwk.Curve
+import com.nimbusds.jose.jwk.gen.ECKeyGenerator
 import com.nimbusds.jwt.SignedJWT
 import eu.europa.ec.eudi.openid4vci.CredentialIssuanceError.ResponseUnparsable
 import eu.europa.ec.eudi.openid4vci.CryptoGenerator.attestationProofSpec
 import eu.europa.ec.eudi.openid4vci.CryptoGenerator.keyAttestationJwtProofsSpec
-import eu.europa.ec.eudi.openid4vci.CryptoGenerator.proofsSpecForEcKeys
+import eu.europa.ec.eudi.openid4vci.CryptoGenerator.noKeyAttestationJwtProofsSpec
 import eu.europa.ec.eudi.openid4vci.IssuerMetadataVersion.NO_NONCE_ENDPOINT
-import eu.europa.ec.eudi.openid4vci.internal.Proof
+import eu.europa.ec.eudi.openid4vci.examples.selfSignedClient
+import eu.europa.ec.eudi.openid4vci.examples.verifySelfSignedClientAttestation
 import eu.europa.ec.eudi.openid4vci.internal.http.CredentialRequestTO
 import io.ktor.client.engine.mock.*
 import io.ktor.http.*
@@ -37,6 +39,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.assertThrows
 import tokenPostApplyPreAuthFlowAssertionsAndGetFormData
+import java.util.UUID
 import kotlin.test.*
 
 class IssuanceSingleRequestTest {
@@ -92,7 +95,7 @@ class IssuanceSingleRequestTest {
             val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
             val (_, outcome) = assertDoesNotThrow {
                 val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-                authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256, 3)).getOrThrow()
+                authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256, 3)).getOrThrow()
             }
             assertIs<SubmissionOutcome.Failed>(outcome)
             assertIs<CredentialIssuanceError.InvalidProof>(outcome.error)
@@ -140,7 +143,7 @@ class IssuanceSingleRequestTest {
         assertFailsWith<CredentialIssuanceError.IssuerBatchSizeLimitExceeded> {
             with(issuer) {
                 val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-                authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256, 4)).getOrThrow()
+                authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256, 4)).getOrThrow()
             }
         }
     }
@@ -158,7 +161,7 @@ class IssuanceSingleRequestTest {
                     val textContent = it.body as TextContent
                     val issuanceRequest = Json.decodeFromString<CredentialRequestTO>(textContent.text)
                     assertNull(
-                        issuanceRequest.proof,
+                        issuanceRequest.proofs,
                         "No proof expected to be sent with request but was sent.",
                     )
                 },
@@ -190,12 +193,16 @@ class IssuanceSingleRequestTest {
                     val textContent = it.body as TextContent
                     val issuanceRequest = Json.decodeFromString<CredentialRequestTO>(textContent.text)
                     assertNotNull(
-                        issuanceRequest.proof,
+                        issuanceRequest.proofs,
                         "Proof expected to be sent but was not sent.",
                     )
-                    assertIs<Proof.Jwt>(issuanceRequest.proof)
-                    val cNonceExists = issuanceRequest.proof.jwt.jwtClaimsSet.claims.contains("nonce")
-                    assertFalse(cNonceExists, "No c_nonce expected in proof but found one")
+                    val jwtProofs = assertNotNull(issuanceRequest.proofs.jwtProofs)
+                    val distinctNonces = jwtProofs
+                        .map { SignedJWT.parse(it) }
+                        .mapNotNull { it.jwtClaimsSet.getStringClaim("nonce") }
+                        .distinct()
+
+                    assertTrue(distinctNonces.isEmpty(), "No c_nonce expected in proof but found one")
                 },
             ),
         )
@@ -208,7 +215,7 @@ class IssuanceSingleRequestTest {
         val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
         with(issuer) {
             val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-            authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+            authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
         }
     }
 
@@ -232,11 +239,18 @@ class IssuanceSingleRequestTest {
                         "Expected request by configuration id but was not.",
                     )
                     assertNotNull(
-                        issuanceRequest.proof,
+                        issuanceRequest.proofs,
                         "Proof expected to be sent but was not sent.",
                     )
-                    assertIs<Proof.Jwt>(issuanceRequest.proof)
-                    val cNonce = issuanceRequest.proof.jwt.jwtClaimsSet.getStringClaim("nonce")
+                    val jwtProofs = assertNotNull(issuanceRequest.proofs.jwtProofs)
+                    assertEquals(
+                        1,
+                        jwtProofs.size,
+                        "Expected exactly one proof but was not",
+                    )
+                    val cNonce = SignedJWT.parse(jwtProofs[0])
+                        .jwtClaimsSet.getStringClaim("nonce")
+
                     assertNotNull(
                         cNonce,
                         "c_nonce expected to be found in proof but was not",
@@ -258,7 +272,7 @@ class IssuanceSingleRequestTest {
         val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
         val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
         val (_, outcome) = with(issuer) {
-            authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+            authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
         }
         assertIs<SubmissionOutcome.Success>(outcome)
     }
@@ -297,7 +311,7 @@ class IssuanceSingleRequestTest {
             )
         } ?: error("No credential identifier")
         with(issuer) {
-            authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256, 1)).getOrThrow()
+            authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256, 1)).getOrThrow()
         }
     }
 
@@ -334,7 +348,7 @@ class IssuanceSingleRequestTest {
         )
         assertThrows<IllegalStateException> {
             with(issuer) {
-                authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256, 1)).getOrThrow()
+                authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256, 1)).getOrThrow()
             }
         }
     }
@@ -371,7 +385,7 @@ class IssuanceSingleRequestTest {
         )
         assertThrows<IllegalStateException> {
             with(issuer) {
-                authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+                authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
             }
         }
     }
@@ -450,7 +464,7 @@ class IssuanceSingleRequestTest {
             val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
             val (_, outcome) = assertDoesNotThrow {
                 val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-                authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+                authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
             }
             assertIs<SubmissionOutcome.Success>(outcome)
             assertTrue { outcome.credentials.size == 1 }
@@ -501,7 +515,7 @@ class IssuanceSingleRequestTest {
             val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
             val ex = assertFailsWith<JsonConvertException> {
                 val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-                authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+                authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
             }
             assertIs<ResponseUnparsable>(ex.cause)
         }
@@ -521,12 +535,14 @@ class IssuanceSingleRequestTest {
                     val textContent = it.body as TextContent
                     val issuanceRequest = Json.decodeFromString<CredentialRequestTO>(textContent.text)
                     assertNotNull(
-                        issuanceRequest.proof,
+                        issuanceRequest.proofs,
                         "Proof expected to be sent but was not sent.",
                     )
-                    assertIs<Proof.Jwt>(issuanceRequest.proof)
+                    assertNotNull(issuanceRequest.proofs.jwtProofs)
+                    val jwtProofStr = issuanceRequest.proofs.jwtProofs[0]
+                    val jwtProof = SignedJWT.parse(jwtProofStr)
 
-                    val iss = issuanceRequest.proof.jwt.jwtClaimsSet.getStringClaim("iss")
+                    val iss = jwtProof.jwtClaimsSet.getStringClaim("iss")
                     assertNull(iss, "No 'iss' claim expected in proof but found one")
                 },
             ),
@@ -541,7 +557,7 @@ class IssuanceSingleRequestTest {
         val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
         with(issuer) {
             val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-            authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+            authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
         }
     }
 
@@ -596,7 +612,53 @@ class IssuanceSingleRequestTest {
         val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
         with(issuer) {
             val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-            authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+            authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
+        }
+    }
+
+    @Test
+    fun `when dpop supported from auth server and issuer nonce endpoint provides dpop nonces, they are included in dpop jwt`() = runTest {
+        val mockedKtorHttpClientFactory = mockedHttpClient(
+            credentialIssuerMetadataWellKnownMocker(),
+            authServerWellKnownMocker(),
+            parPostMocker(),
+            nonceEndpointMocker(dPopNonceValue = "nonce_endpoint_dpop_nonce"),
+            tokenPostMocker(dpopAccessToken = true),
+            singleIssuanceRequestMocker(
+                requestValidator = {
+                    val headers = it.headers
+
+                    val authorizationHeader = headers.get("Authorization")
+                    assertNotNull(authorizationHeader, "No Authorization header found.")
+                    assertTrue(authorizationHeader.contains("DPoP"), "Expected DPoP access token but was not.")
+
+                    val dpopHeader = headers.get("DPoP")
+                    assertNotNull(
+                        dpopHeader,
+                        "No DPoP found.",
+                    )
+                    val dpopJwt = SignedJWT.parse(dpopHeader)
+                    assertNotNull(
+                        dpopJwt.jwtClaimsSet.claims.get("nonce"),
+                        "Expected nonce but didn't find one.",
+                    )
+                    assertTrue("Expected dpop nonce from issuer's nonce endpoint but wasn't.") {
+                        "nonce_endpoint_dpop_nonce" == dpopJwt.jwtClaimsSet.claims.get("nonce")
+                    }
+                },
+            ),
+        )
+
+        val (authorizedRequest, issuer) = authorizeRequestForCredentialOffer(
+            config = OpenId4VCIConfigurationWithDpopSigner,
+            credentialOfferStr = CredentialOfferMixedDocTypes_NO_GRANTS,
+            httpClient = mockedKtorHttpClientFactory,
+        )
+
+        val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
+        with(issuer) {
+            val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
+            authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
         }
     }
 
@@ -631,7 +693,7 @@ class IssuanceSingleRequestTest {
         val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
         with(issuer) {
             val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-            authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+            authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
         }
     }
 
@@ -653,7 +715,7 @@ class IssuanceSingleRequestTest {
         assertFailsWith<IllegalArgumentException> {
             with(issuer) {
                 val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
-                authorizedRequest.request(requestPayload, proofsSpecForEcKeys(Curve.P_256)).getOrThrow()
+                authorizedRequest.request(requestPayload, noKeyAttestationJwtProofsSpec(Curve.P_256)).getOrThrow()
             }
         }
     }
@@ -681,6 +743,30 @@ class IssuanceSingleRequestTest {
     }
 
     @Test
+    fun `issuance fails if jwt proof with key attestation is signed with algorithm not in jwt proof's supported algorithms`() = runTest {
+        val mockedHttpClient = mockedHttpClient(
+            credentialIssuerMetadataWellKnownMocker(IssuerMetadataVersion.KEY_ATTESTATION_REQUIRED),
+            authServerWellKnownMocker(),
+            parPostMocker(),
+            tokenPostMocker(),
+            nonceEndpointMocker(),
+            singleIssuanceRequestMocker(),
+        )
+        val (authorizedRequest, issuer) = authorizeRequestForCredentialOffer(
+            credentialOfferStr = CredentialOfferMixedDocTypes_NO_GRANTS,
+            httpClient = mockedHttpClient,
+        )
+
+        val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
+        assertFailsWith<CredentialIssuanceError.ProofGenerationError.ProofTypeSigningAlgorithmNotSupported> {
+            with(issuer) {
+                val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
+                authorizedRequest.request(requestPayload, keyAttestationJwtProofsSpec(Curve.P_384)).getOrThrow()
+            }
+        }
+    }
+
+    @Test
     fun `issuance with attestation proof is successful when the issuer supports it `() = runTest {
         val mockedHttpClient = mockedHttpClient(
             credentialIssuerMetadataWellKnownMocker(IssuerMetadataVersion.ATTESTATION_PROOF_SUPPORTED),
@@ -701,4 +787,208 @@ class IssuanceSingleRequestTest {
             authorizedRequest.request(requestPayload, attestationProofSpec()).getOrThrow()
         }
     }
+
+    @Test
+    fun `issuance fails if attestation proof's signing alg is not in issuer's supported algorithms for this proof type`() = runTest {
+        val mockedHttpClient = mockedHttpClient(
+            credentialIssuerMetadataWellKnownMocker(IssuerMetadataVersion.ATTESTATION_PROOF_SUPPORTED),
+            authServerWellKnownMocker(),
+            parPostMocker(),
+            tokenPostMocker(),
+            nonceEndpointMocker(),
+            singleIssuanceRequestMocker(),
+        )
+        val (authorizedRequest, issuer) = authorizeRequestForCredentialOffer(
+            credentialOfferStr = CredentialOfferMixedDocTypes_NO_GRANTS,
+            httpClient = mockedHttpClient,
+        )
+
+        val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
+        with(issuer) {
+            val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
+            authorizedRequest.request(requestPayload, attestationProofSpec(curve = Curve.P_384)).getOrThrow()
+        }
+    }
+
+    @Test
+    fun `issuance fails with attested client when authorization server does not support attest_jwt_client_auth`() = runTest {
+        val walletInstanceKey = ECKeyGenerator(Curve.P_521).keyID(UUID.randomUUID().toString()).generate()
+        val client = selfSignedClient(
+            walletInstanceKey = walletInstanceKey,
+            clientId = "MyWallet_ClientId",
+        )
+        val config = OpenId4VCIConfiguration.copy(clientAuthentication = client)
+
+        val mockedHttpClient = mockedHttpClient(
+            credentialIssuerMetadataWellKnownMocker(IssuerMetadataVersion.ATTESTATION_PROOF_SUPPORTED),
+            authServerWellKnownMocker(AuthServerMetadataVersion.NO_CLIENT_ATTESTATION),
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            authorizeRequestForCredentialOffer(
+                config = config,
+                credentialOfferStr = CredentialOfferMixedDocTypes_NO_GRANTS,
+                httpClient = mockedHttpClient,
+            )
+        }
+        assertTrue { "Authentication Method not supported by Authorization Server" in error.message.orEmpty() }
+    }
+
+    @Test
+    fun `issuance fails with attest client with unsupported attestation jwt or attestation pop jwt signing algorithm`() = runTest {
+        val walletInstanceKey = ECKeyGenerator(Curve.P_256).keyID(UUID.randomUUID().toString()).generate()
+        val client = selfSignedClient(
+            walletInstanceKey = walletInstanceKey,
+            clientId = "MyWallet_ClientId",
+        )
+        val config = OpenId4VCIConfiguration.copy(clientAuthentication = client)
+
+        val mockedHttpClient = mockedHttpClient(
+            credentialIssuerMetadataWellKnownMocker(IssuerMetadataVersion.ATTESTATION_PROOF_SUPPORTED),
+            authServerWellKnownMocker(AuthServerMetadataVersion.FULL),
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            authorizeRequestForCredentialOffer(
+                config = config,
+                credentialOfferStr = CredentialOfferMixedDocTypes_NO_GRANTS,
+                httpClient = mockedHttpClient,
+            )
+        }
+        assertTrue {
+            "Client Attestation JWS Algorithm not supported by Authorization Server" in error.message.orEmpty() ||
+                "Client Attestation POP JWS Algorithm not supported by Authorization Server" in error.message.orEmpty()
+        }
+    }
+
+    @Test
+    fun `issuance success with attested client`() = runTest {
+        val walletInstanceKey = ECKeyGenerator(Curve.P_521).keyID(UUID.randomUUID().toString()).generate()
+        val client = selfSignedClient(
+            walletInstanceKey = walletInstanceKey,
+            clientId = "MyWallet_ClientId",
+        )
+        val abcaChallenge = Nonce(UUID.randomUUID().toString())
+        val updatedAbcaChallenge = Nonce(UUID.randomUUID().toString())
+
+        val mockedHttpClient = mockedHttpClient(
+            credentialIssuerMetadataWellKnownMocker(IssuerMetadataVersion.ATTESTATION_PROOF_SUPPORTED),
+            authServerWellKnownMocker(AuthServerMetadataVersion.FULL),
+            challengePostMocker(abcaChallenge),
+            parPostMocker {
+                it.verifySelfSignedClientAttestation(walletInstanceKey, abcaChallenge)
+            },
+            challengePostMocker(updatedAbcaChallenge),
+            tokenPostMocker {
+                it.verifySelfSignedClientAttestation(walletInstanceKey, updatedAbcaChallenge)
+            },
+            nonceEndpointMocker(),
+            singleIssuanceRequestMocker(),
+        )
+
+        val config = OpenId4VCIConfiguration.copy(clientAuthentication = client)
+
+        val (authorizedRequest, issuer) = authorizeRequestForCredentialOffer(
+            config = config,
+            credentialOfferStr = CredentialOfferMixedDocTypes_NO_GRANTS,
+            httpClient = mockedHttpClient,
+        )
+
+        val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
+        with(issuer) {
+            val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
+            authorizedRequest.request(requestPayload, attestationProofSpec()).getOrThrow()
+        }
+    }
+
+    @Test
+    fun `issuance fails for attested client when authorization server returns use_attestation_challenge and no challenge`() =
+        runTest {
+            val walletInstanceKey = ECKeyGenerator(Curve.P_521).keyID(UUID.randomUUID().toString()).generate()
+            val client = selfSignedClient(
+                walletInstanceKey = walletInstanceKey,
+                clientId = "MyWallet_ClientId",
+            )
+            val abcaChallenge = Nonce(UUID.randomUUID().toString())
+
+            val mockedHttpClient = mockedHttpClient(
+                credentialIssuerMetadataWellKnownMocker(IssuerMetadataVersion.ATTESTATION_PROOF_SUPPORTED),
+                authServerWellKnownMocker(AuthServerMetadataVersion.FULL),
+                challengePostMocker(abcaChallenge),
+                parPostMocker(error = AttestationBasedClientAuthenticationSpec.USE_ATTESTATION_CHALLENGE_ERROR) {
+                    it.verifySelfSignedClientAttestation(walletInstanceKey, abcaChallenge)
+                },
+            )
+
+            val config = OpenId4VCIConfiguration.copy(clientAuthentication = client)
+
+            val error = assertFailsWith<IllegalStateException> {
+                authorizeRequestForCredentialOffer(
+                    config = config,
+                    credentialOfferStr = CredentialOfferMixedDocTypes_NO_GRANTS,
+                    httpClient = mockedHttpClient,
+                )
+            }
+            assertEquals(
+                "Authorization Server replied with " +
+                    "'${AttestationBasedClientAuthenticationSpec.USE_ATTESTATION_CHALLENGE_ERROR}' " +
+                    "error code, but hasn't provided a challenge using the " +
+                    "'${AttestationBasedClientAuthenticationSpec.CHALLENGE_HEADER}' header",
+                error.message,
+            )
+        }
+
+    @Test
+    fun `attested client retries with updated challenge when authorization server returns use_attestation_challenge and a new challenge`() =
+        runTest {
+            val walletInstanceKey = ECKeyGenerator(Curve.P_521).keyID(UUID.randomUUID().toString()).generate()
+            val client = selfSignedClient(
+                walletInstanceKey = walletInstanceKey,
+                clientId = "MyWallet_ClientId",
+            )
+            val abcaChallenge = Nonce(UUID.randomUUID().toString())
+            val firstAbcaChallengeUpdate = Nonce(UUID.randomUUID().toString())
+            val secondAbcaChallengeUpdate = Nonce(UUID.randomUUID().toString())
+
+            val mockedHttpClient = mockedHttpClient(
+                credentialIssuerMetadataWellKnownMocker(IssuerMetadataVersion.ATTESTATION_PROOF_SUPPORTED),
+                authServerWellKnownMocker(AuthServerMetadataVersion.FULL),
+                challengePostMocker(abcaChallenge),
+                parPostMocker(
+                    updatedAbcaChallenge = firstAbcaChallengeUpdate,
+                    error = AttestationBasedClientAuthenticationSpec.USE_ATTESTATION_CHALLENGE_ERROR,
+                ) {
+                    it.verifySelfSignedClientAttestation(walletInstanceKey, abcaChallenge)
+                },
+                parPostMocker {
+                    it.verifySelfSignedClientAttestation(walletInstanceKey, firstAbcaChallengeUpdate)
+                },
+                challengePostMocker(firstAbcaChallengeUpdate),
+                tokenPostMocker(
+                    updatedAbcaChallenge = secondAbcaChallengeUpdate,
+                    error = AttestationBasedClientAuthenticationSpec.USE_ATTESTATION_CHALLENGE_ERROR,
+                ) {
+                    it.verifySelfSignedClientAttestation(walletInstanceKey, firstAbcaChallengeUpdate)
+                },
+                tokenPostMocker {
+                    it.verifySelfSignedClientAttestation(walletInstanceKey, secondAbcaChallengeUpdate)
+                },
+                nonceEndpointMocker(),
+                singleIssuanceRequestMocker(),
+            )
+
+            val config = OpenId4VCIConfiguration.copy(clientAuthentication = client)
+
+            val (authorizedRequest, issuer) = authorizeRequestForCredentialOffer(
+                config = config,
+                credentialOfferStr = CredentialOfferMixedDocTypes_NO_GRANTS,
+                httpClient = mockedHttpClient,
+            )
+
+            val credentialConfigurationId = issuer.credentialOffer.credentialConfigurationIdentifiers[0]
+            with(issuer) {
+                val requestPayload = IssuanceRequestPayload.ConfigurationBased(credentialConfigurationId)
+                authorizedRequest.request(requestPayload, attestationProofSpec()).getOrThrow()
+            }
+        }
 }

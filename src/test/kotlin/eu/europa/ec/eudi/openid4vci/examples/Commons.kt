@@ -19,7 +19,7 @@ import com.nimbusds.jose.jwk.Curve
 import eu.europa.ec.eudi.openid4vci.*
 import eu.europa.ec.eudi.openid4vci.CryptoGenerator.attestationProofSpec
 import eu.europa.ec.eudi.openid4vci.CryptoGenerator.keyAttestationJwtProofsSpec
-import eu.europa.ec.eudi.openid4vci.CryptoGenerator.proofsSpecForEcKeys
+import eu.europa.ec.eudi.openid4vci.CryptoGenerator.noKeyAttestationJwtProofsSpec
 import io.ktor.client.*
 import io.ktor.client.engine.apache.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -115,9 +115,9 @@ suspend fun Issuer.submitCredentialRequest(
         }
 
     val proofSpec: ProofsSpecification = when (proofsType) {
-        is ProofsType.JwtProofsNoKeyAttestation -> proofsSpecForEcKeys(Curve.P_256, proofsNo)
+        is ProofsType.JwtProofsNoKeyAttestation -> noKeyAttestationJwtProofsSpec(Curve.P_256, proofsNo)
         is ProofsType.JwtProofWithKeyAttestation -> keyAttestationJwtProofsSpec(Curve.P_256, proofsNo)
-        is ProofsType.AttestationProof -> attestationProofSpec(proofsNo)
+        is ProofsType.AttestationProof -> attestationProofSpec(keysNo = proofsNo)
     }
     return authorizedRequest.request(requestPayload, proofSpec).getOrThrow()
 }
@@ -171,7 +171,6 @@ suspend fun Issuer.testIssuanceWithPreAuthorizedCodeFlow(
         val authorizedRequest = authorizeWithPreAuthorizationCode(txCode).getOrThrow()
         submitCredentialRequest(authorizedRequest, credCfgId, proofsType)
     }
-
     ensureIssued(authorized, outcome, httpClient)
 }
 
@@ -204,7 +203,12 @@ suspend fun handleDeferred(
     var ctx = initialContext
     var cred: List<IssuedCredential>
     do {
-        val (newCtx, outcome) = DeferredIssuer.queryForDeferredCredential(ctx = ctx, httpClient).getOrThrow()
+        val (newCtx, outcome) = DeferredIssuer.queryForDeferredCredential(
+            ctx = ctx,
+            httpClient = httpClient,
+            responseEncryptionKey = null,
+        ).getOrThrow()
+
         ctx = newCtx ?: ctx
         cred = when (outcome) {
             is DeferredCredentialQueryOutcome.Errored -> error(outcome.error)
@@ -271,7 +275,12 @@ suspend fun <ENV, USER> ENV.testIssuanceWithPreAuthorizedCodeFlow(
     with(issuer) {
         val credCfg = credentialOffer.credentialIssuerMetadata.credentialConfigurationsSupported[credCfgId]
         assertNotNull(credCfg)
-        testIssuanceWithPreAuthorizedCodeFlow(txCode, credCfgId, proofsOptions, httpClient)
+        testIssuanceWithPreAuthorizedCodeFlow(
+            txCode = txCode,
+            credCfgId = credCfgId,
+            proofsType = proofsOptions,
+            httpClient = httpClient,
+        )
     }
 }
 

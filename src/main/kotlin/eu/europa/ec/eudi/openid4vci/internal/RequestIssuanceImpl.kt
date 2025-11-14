@@ -24,9 +24,11 @@ import com.nimbusds.jose.jwk.JWK
 import com.nimbusds.jose.jwk.RSAKey
 import com.nimbusds.jwt.SignedJWT
 import eu.europa.ec.eudi.openid4vci.*
+import eu.europa.ec.eudi.openid4vci.internal.http.CNonceAndDPoPNonce
 import eu.europa.ec.eudi.openid4vci.internal.http.CredentialEndpointClient
 import eu.europa.ec.eudi.openid4vci.internal.http.NonceEndpointClient
 import java.time.Instant
+import kotlin.time.Duration
 
 internal class RequestIssuanceImpl(
     private val credentialOffer: CredentialOffer,
@@ -34,7 +36,7 @@ internal class RequestIssuanceImpl(
     private val credentialEndpointClient: CredentialEndpointClient,
     private val nonceEndpointClient: NonceEndpointClient?,
     private val batchCredentialIssuance: BatchCredentialIssuance,
-    private val responseEncryptionSpec: IssuanceResponseEncryptionSpec?,
+    private val exchangeEncryptionSpecification: ExchangeEncryptionSpecification,
 ) : RequestIssuance {
 
     init {
@@ -54,21 +56,22 @@ internal class RequestIssuanceImpl(
     override suspend fun AuthorizedRequest.request(
         requestPayload: IssuanceRequestPayload,
         proofsSpecification: ProofsSpecification,
-    ): Result<AuthorizedRequestAnd<SubmissionOutcome>> = runCatching {
-        val proofs = buildProofs(proofsSpecification, requestPayload.credentialConfigurationIdentifier, grant)
+    ): Result<AuthorizedRequestAnd<SubmissionOutcome>> = runCatchingCancellable {
+        val (proofs, proofsDpopNonce) = buildProofs(proofsSpecification, requestPayload.credentialConfigurationIdentifier, grant)
         val credentialRequest = buildRequest(requestPayload, proofs, credentialIdentifiers.orEmpty())
 
         // Place the request
-        // TODO Please note on the draft 16, the `resourceServerDpopNonce` can be change from the proofs step
+        val proofsOrAuthRequestDpopNonce = proofsDpopNonce ?: resourceServerDpopNonce
         val (outcome, newResourceServerDpopNonce) =
             credentialEndpointClient.placeIssuanceRequest(
                 accessToken,
-                resourceServerDpopNonce,
+                proofsOrAuthRequestDpopNonce,
                 credentialRequest,
             ).getOrThrow()
 
         // Update state (maybe) with new Dpop Nonce from resource server
-        val updatedAuthorizedRequest = this.withResourceServerDpopNonce(newResourceServerDpopNonce)
+        val updatedAuthorizedRequest =
+            this.withResourceServerDpopNonce(newResourceServerDpopNonce ?: proofsOrAuthRequestDpopNonce)
         updatedAuthorizedRequest to outcome.toPub()
     }
 
@@ -76,28 +79,47 @@ internal class RequestIssuanceImpl(
         proofsSpecification: ProofsSpecification,
         credentialConfigId: CredentialConfigurationIdentifier,
         grant: Grant,
-    ): List<Proof> {
+    ): Pair<List<Proof>, Nonce?> {
         proofsSpecification.ensureCompatibleWith(credentialConfigId)
 
         return when (proofsSpecification) {
-            is ProofsSpecification.NoProofs -> emptyList()
-            is ProofsSpecification.JwtProofs.WithKeyAttestation -> listOf(
-                jwtProofWithKeyAttestation(
+            is ProofsSpecification.NoProofs -> emptyList<Proof>() to null
+
+            is ProofsSpecification.JwtProofs.WithKeyAttestation -> {
+                val cNonceAndDPoPNonce = cNonce()
+                val proofs = listOf(
+                    jwtProofWithKeyAttestation(
+                        proofsSpecification,
+                        credentialConfigId,
+                        grant,
+                        cNonceAndDPoPNonce?.cnonce,
+                    ),
+                )
+                proofs to cNonceAndDPoPNonce?.dpopNonce
+            }
+
+            is ProofsSpecification.JwtProofs.NoKeyAttestation -> {
+                val cNonceAndDPoPNonce = cNonce()
+                val proofs = jwtProofsWithoutKeyAttestation(
                     proofsSpecification,
                     credentialConfigId,
                     grant,
-                    cNonce(),
-                ),
-            )
+                    cNonceAndDPoPNonce?.cnonce,
+                )
+                proofs to cNonceAndDPoPNonce?.dpopNonce
+            }
 
-            is ProofsSpecification.JwtProofs.NoKeyAttestation -> jwtProofsWithoutKeyAttestation(
-                proofsSpecification,
-                credentialConfigId,
-                grant,
-                cNonce(),
-            )
-
-            is ProofsSpecification.AttestationProof -> listOf(attestationProof(proofsSpecification, cNonce()))
+            is ProofsSpecification.AttestationProof -> {
+                val cNonceAndDPoPNonce = cNonce()
+                val proofs = listOf(
+                    attestationProof(
+                        proofsSpecification,
+                        credentialConfigId,
+                        cNonceAndDPoPNonce?.cnonce,
+                    ),
+                )
+                proofs to cNonceAndDPoPNonce?.dpopNonce
+            }
         }
     }
 
@@ -154,7 +176,7 @@ internal class RequestIssuanceImpl(
         proofsSpecification: ProofsSpecification.JwtProofs.WithKeyAttestation,
         credentialConfigId: CredentialConfigurationIdentifier,
         grant: Grant,
-        cNonce: CNonce?,
+        cNonce: Nonce?,
     ): Proof.Jwt {
         val (proofSignerProvider, keyIndex) = proofsSpecification
         val proofSigner = proofSignerProvider(cNonce)
@@ -164,6 +186,7 @@ internal class RequestIssuanceImpl(
         }
         val claims = jwtProofClaims(cNonce = cNonce, grant = grant)
         val jwtProof = proofSigner.use { operation ->
+            operation.publicMaterial.ensureKeyAttestationJwtAlgIsSupported(credentialConfigId, ProofType.JWT)
             val signer = KeyAttestationJwtProofSigner(joseAlg, operation, keyIndex)
             val signedJwt = signer.sign(claims)
             SignedJWT.parse(signedJwt)
@@ -172,11 +195,23 @@ internal class RequestIssuanceImpl(
         return Proof.Jwt(jwtProof)
     }
 
+    private fun KeyAttestationJWT.ensureKeyAttestationJwtAlgIsSupported(
+        credentialConfigId: CredentialConfigurationIdentifier,
+        proofType: ProofType,
+    ) {
+        val attestationJwtAlg = SignedJWT.parse(value).header.algorithm
+        val proofTypesSupported = credentialSupportedById(credentialConfigId).proofTypesSupported
+        val spec = proofTypesSupported.values.firstOrNull { it.type() == proofType }
+        ensure(spec != null && attestationJwtAlg in spec.algorithms()) {
+            CredentialIssuanceError.ProofGenerationError.ProofTypeSigningAlgorithmNotSupported()
+        }
+    }
+
     private suspend fun jwtProofsWithoutKeyAttestation(
         proofsSpecification: ProofsSpecification.JwtProofs.NoKeyAttestation,
         credentialConfigId: CredentialConfigurationIdentifier,
         grant: Grant,
-        cNonce: CNonce?,
+        cNonce: Nonce?,
     ): List<Proof.Jwt> {
         val joseAlg = run {
             val javaSigningAlgorithm = proofsSpecification.proofsSigner.javaAlgorithm
@@ -194,9 +229,11 @@ internal class RequestIssuanceImpl(
 
     private suspend fun attestationProof(
         proofsSpecification: ProofsSpecification.AttestationProof,
-        cNonce: CNonce?,
+        credentialConfigId: CredentialConfigurationIdentifier,
+        cNonce: Nonce?,
     ): Proof.Attestation {
         val keyAttestationJwt = proofsSpecification.attestationProvider(cNonce)
+        keyAttestationJwt.ensureKeyAttestationJwtAlgIsSupported(credentialConfigId, ProofType.ATTESTATION)
         return Proof.Attestation(keyAttestationJwt)
     }
 
@@ -233,27 +270,27 @@ internal class RequestIssuanceImpl(
         }
     }
 
-    private suspend fun cNonce(): CNonce? = nonceEndpointClient?.getNonce()?.getOrThrow()
+    private suspend fun cNonce(): CNonceAndDPoPNonce? = nonceEndpointClient?.getNonce()?.getOrThrow()
 
     private fun jwtProofClaims(
-        cNonce: CNonce?,
+        cNonce: Nonce?,
         grant: Grant,
     ): JwtProofClaims {
-        fun iss(client: Client, grant: Grant): ClientId? {
+        fun iss(clientAuthentication: ClientAuthentication, grant: Grant): ClientId? {
             val useIss = when (grant) {
                 Grant.AuthorizationCode -> true
-                Grant.PreAuthorizedCodeGrant -> when (client) {
-                    is Client.Attested -> true
-                    is Client.Public -> false
+                Grant.PreAuthorizedCodeGrant -> when (clientAuthentication) {
+                    is ClientAuthentication.AttestationBased -> true
+                    is ClientAuthentication.None -> false
                 }
             }
-            return client.id.takeIf { useIss }
+            return clientAuthentication.id.takeIf { useIss }
         }
 
         return JwtProofClaims(
             audience = credentialOffer.credentialIssuerMetadata.credentialIssuerIdentifier.toString(),
             issuedAt = Instant.now(),
-            issuer = iss(config.client, grant),
+            issuer = iss(config.clientAuthentication, grant),
             nonce = cNonce?.value,
         )
     }
@@ -289,7 +326,7 @@ internal class RequestIssuanceImpl(
             CredentialIssuanceRequest.byCredentialConfigurationId(
                 requestPayload.credentialConfigurationIdentifier,
                 proofs,
-                responseEncryptionSpec,
+                exchangeEncryptionSpecification,
             )
         }
 
@@ -298,7 +335,7 @@ internal class RequestIssuanceImpl(
             CredentialIssuanceRequest.byCredentialId(
                 requestPayload.credentialIdentifier,
                 proofs,
-                responseEncryptionSpec,
+                exchangeEncryptionSpecification,
             )
         }
     }
@@ -325,7 +362,12 @@ internal sealed interface SubmissionOutcomeInternal {
 
     data class Deferred(
         val transactionId: TransactionId,
-    ) : SubmissionOutcomeInternal
+        val interval: Duration,
+    ) : SubmissionOutcomeInternal {
+        init {
+            require(interval.isPositive()) { "interval must be positive" }
+        }
+    }
 
     data class Failed(
         val error: CredentialIssuanceError,
@@ -334,7 +376,7 @@ internal sealed interface SubmissionOutcomeInternal {
     fun toPub(): SubmissionOutcome =
         when (this) {
             is Success -> SubmissionOutcome.Success(credentials, notificationId)
-            is Deferred -> SubmissionOutcome.Deferred(transactionId)
+            is Deferred -> SubmissionOutcome.Deferred(transactionId, interval)
             is Failed -> SubmissionOutcome.Failed(error)
         }
 }

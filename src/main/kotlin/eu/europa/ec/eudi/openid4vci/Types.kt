@@ -15,12 +15,17 @@
  */
 package eu.europa.ec.eudi.openid4vci
 
+import com.nimbusds.jose.CompressionAlgorithm
 import com.nimbusds.jose.EncryptionMethod
 import com.nimbusds.jose.JWEAlgorithm
+import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.jwk.JWK
 import com.nimbusds.jose.jwk.KeyType
 import com.nimbusds.jose.jwk.KeyUse
+import com.nimbusds.jose.util.JSONObjectUtils
 import com.nimbusds.oauth2.sdk.`as`.ReadOnlyAuthorizationServerMetadata
+import eu.europa.ec.eudi.openid4vci.CredentialIssuanceError.ResponseEncryptionError.MissingRequiredRequestEncryptionSpecification
+import eu.europa.ec.eudi.openid4vci.internal.ensureNotNull
 import kotlinx.serialization.Serializable
 import java.net.URI
 import java.net.URL
@@ -162,19 +167,6 @@ value class AuthorizationCode(val code: String) {
 }
 
 /**
- * A c_nonce as provided from issuance server's nonce endpoint.
- *
- * @param value The c_nonce value
- */
-@JvmInline
-value class CNonce(val value: String) : java.io.Serializable {
-    init {
-        value.requireNotEmpty()
-    }
-    override fun toString(): String = value
-}
-
-/**
  * An identifier of a Deferred Issuance transaction.
  *
  * @param value The identifier's value
@@ -239,23 +231,85 @@ sealed interface JwtBindingKey {
     }
 }
 
-data class IssuanceResponseEncryptionSpec(
-    val jwk: JWK,
-    val algorithm: JWEAlgorithm,
+/**
+ * Represents the specifications and parameters required for encryption. Used for encrypting issuance requests or for communicating
+ * to issuers the encryption parameters by which expected issuance responses should be encrypted by.
+ *
+ * This class is designed to encapsulate encryption-related configurations,
+ * including the key, encryption method, and an optional compression algorithm.
+ * It validates the provided key and algorithm for compatibility with the
+ * encryption operation and ensures that they adhere to the expected asymmetric
+ * encryption standards.
+ *
+ * @property recipientKey The JSON Web Key (JWK) used for encryption, representing the cryptographic key.
+ * @property encryptionMethod The encryption method specifying the algorithm for payload encryption.
+ * @property compressionAlgorithm An optional compression algorithm to apply before encryption.
+ * @property encryptionKeyAlgorithm The derived encryption key algorithm from the JWK's algorithm property, expected to be of type JWEAlgorithm.
+ *
+ * @throws IllegalArgumentException If the key use is not intended for encryption, if the key does not contain an algorithm,
+ * or the algorithm is incompatible with the key or encryption process.
+ */
+data class EncryptionSpec(
+    val recipientKey: JWK,
     val encryptionMethod: EncryptionMethod,
+    val compressionAlgorithm: CompressionAlgorithm? = null,
 ) : java.io.Serializable {
+
+    val algorithm: JWEAlgorithm
+        get() = JWEAlgorithm.parse(recipientKey.algorithm.name)
+
     init {
+        // Validate key is for encryption operation
+        val keyUse: KeyUse? = recipientKey.keyUse
+        if (keyUse != null) {
+            require(keyUse == KeyUse.ENCRYPTION) {
+                "Provided key use is not encryption"
+            }
+        }
+        val keyAlgorithm = recipientKey.algorithm
+        requireNotNull(keyAlgorithm) {
+            "Provided key does not contain an algorithm"
+        }
         // Validate algorithm provided is for asymmetric encryption
-        require(JWEAlgorithm.Family.ASYMMETRIC.contains(algorithm)) {
+        require(JWEAlgorithm.Family.ASYMMETRIC.contains(keyAlgorithm)) {
             "Provided encryption algorithm is not an asymmetric encryption algorithm"
         }
         // Validate algorithm matches key
-        require(jwk.keyType == KeyType.forAlgorithm(algorithm)) {
+        require(recipientKey.keyType == KeyType.forAlgorithm(keyAlgorithm)) {
             "Encryption key and encryption algorithm do not match"
         }
-        // Validate key is for encryption operation
-        require(jwk.keyUse == KeyUse.ENCRYPTION) {
-            "Provided key use is not encryption"
+    }
+}
+
+/**
+ * Represents the encryption specifications for an issuance process, encompassing request and response encryption.
+ *
+ * This class is used to define the encryption configuration for:
+ * - The issuance request, specifying the parameters required to encrypt the request sent to the issuer.
+ * - The issuance response, specifying the expected parameters of encrypted responses received from the issuer.
+ *
+ * If according to wallet configuration and issuer capabilities, response encryption is feasible, it will be used to
+ * request encrypted responses from issuer. In this case the request must be also encrypted, so it is mandatory to have
+ * a request encryption specification.
+ *
+ * Each encryption specification leverages the `EncryptionSpec` class to ensure compatibility and secure encryption using standards
+ * such as JWKs and JWE algorithms.
+ *
+ * @property requestEncryptionSpec The encryption specification for securing issuance requests sent to the issuer.
+ * @property responseEncryptionSpec The encryption specification for securing issuance responses returned by the issuer.
+ *
+ * @throws MissingRequiredRequestEncryptionSpecification Thrown when a response encryption specification is provided
+ * but request encryption specification is missing.
+ */
+data class ExchangeEncryptionSpecification(
+    val requestEncryptionSpec: EncryptionSpec?,
+    val responseEncryptionSpec: EncryptionSpec?,
+) {
+    init {
+        if (responseEncryptionSpec != null) {
+            ensureNotNull(requestEncryptionSpec) {
+                MissingRequiredRequestEncryptionSpecification()
+            }
         }
     }
 }
@@ -272,6 +326,23 @@ value class Scope(val value: String) {
 }
 
 typealias CIAuthorizationServerMetadata = ReadOnlyAuthorizationServerMetadata
+
+val CIAuthorizationServerMetadata.challengeEndpointURI: URI?
+    get() = JSONObjectUtils.getURI(customParameters, AttestationBasedClientAuthenticationSpec.CHALLENGE_ENDPOINT)
+
+val CIAuthorizationServerMetadata.clientAttestationJWSAlgs: List<JWSAlgorithm>?
+    get() = JSONObjectUtils.getStringList(
+        customParameters,
+        AttestationBasedClientAuthenticationSpec.ATTESTATION_JWT_SIGNING_ALGORITHMS_SUPPORTED,
+    )
+        ?.mapNotNull { JWSAlgorithm.parse(it) }
+
+val CIAuthorizationServerMetadata.clientAttestationPOPJWSAlgs: List<JWSAlgorithm>?
+    get() = JSONObjectUtils.getStringList(
+        customParameters,
+        AttestationBasedClientAuthenticationSpec.ATTESTATION_POP_JWT_SIGNING_ALGORITHMS_SUPPORTED,
+    )
+        ?.mapNotNull { JWSAlgorithm.parse(it) }
 
 @JvmInline
 value class CoseAlgorithm(val value: Int) {
@@ -311,6 +382,7 @@ value class CoseCurve(val value: Int) {
  * Nonce (single use) value provided either by the Authorization or Resource server.
  */
 @JvmInline
+@Serializable
 value class Nonce(val value: String) {
     init {
         require(value.isNotEmpty()) { "Nonce value cannot be empty" }
@@ -341,4 +413,16 @@ sealed interface IssuerTrust {
 
 private fun String.requireNotEmpty() {
     require(isNotEmpty()) { "Value cannot be empty" }
+}
+
+/**
+ * Unique identifier for a JWT.
+ */
+@JvmInline
+@Serializable
+value class JwtId(val value: String) {
+    init {
+        require(value.isNotBlank()) { "value cannot be blank" }
+    }
+    override fun toString(): String = value
 }

@@ -20,7 +20,10 @@ import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.JWSHeader
 import com.nimbusds.jose.JWSSigner
 import com.nimbusds.jose.crypto.ECDSASigner
-import com.nimbusds.jose.jwk.*
+import com.nimbusds.jose.jwk.Curve
+import com.nimbusds.jose.jwk.ECKey
+import com.nimbusds.jose.jwk.JWK
+import com.nimbusds.jose.jwk.KeyUse
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator
 import com.nimbusds.jwt.JWTClaimsSet
 import com.nimbusds.jwt.SignedJWT
@@ -53,7 +56,7 @@ object CryptoGenerator {
         )
     }
 
-    fun proofsSpecForEcKeys(
+    fun noKeyAttestationJwtProofsSpec(
         curve: Curve = Curve.P_256,
         keysNo: Int = 1,
     ): ProofsSpecification {
@@ -71,7 +74,7 @@ object CryptoGenerator {
         attestedKeysCount: Int = 3,
     ): ProofsSpecification {
         val ecKeys = List(attestedKeysCount) { randomECSigningKey(curve) }
-        val signerProvider: suspend (CNonce?) -> Signer<KeyAttestationJWT> = { cNonce ->
+        val signerProvider: suspend (Nonce?) -> Signer<KeyAttestationJWT> = { cNonce ->
             Signer.fromNimbusEcKey(
                 ecPrivateKey = ecKeys[0],
                 keyInfo =
@@ -86,11 +89,14 @@ object CryptoGenerator {
         return ProofsSpecification.JwtProofs.WithKeyAttestation(signerProvider, 1)
     }
 
-    fun attestationProofSpec(keysNo: Int = 3) =
+    fun attestationProofSpec(
+        curve: Curve = Curve.P_256,
+        keysNo: Int = 3,
+    ) =
         ProofsSpecification.AttestationProof { nonce ->
             keyAttestationJwt(
                 List(keysNo) {
-                    randomECSigningKey(Curve.P_256)
+                    randomECSigningKey(curve)
                 },
                 nonce,
             )
@@ -122,7 +128,7 @@ object CryptoGenerator {
 
     fun keyAttestationJwt(
         attestedKeys: List<JWK>? = null,
-        nonce: CNonce? = null,
+        nonce: Nonce? = null,
     ) = run {
         val privateKey = loadECPrivateKeyFromFile("eu/europa/ec/eudi/openid4vci/internal/key_attestation_jwt.key")
         val certificate = loadCertificateFromFile("eu/europa/ec/eudi/openid4vci/internal/key_attestation_jwt.cert")
@@ -139,7 +145,7 @@ object CryptoGenerator {
         attestedKeys: List<JWK>,
         certificate: X509Certificate,
         signer: JWSSigner,
-        nonce: CNonce? = null,
+        nonce: Nonce? = null,
     ): SignedJWT = SignedJWT(
         JWSHeader.Builder(JWSAlgorithm.ES256)
             .type(JOSEObjectType(OpenId4VCISpec.KEY_ATTESTATION_JWT_TYPE))
