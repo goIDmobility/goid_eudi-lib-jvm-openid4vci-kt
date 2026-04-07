@@ -694,8 +694,7 @@ private fun proofTypeMeta(type: String, meta: ProofTypeSupportedMetaTO): ProofTy
             },
             keyAttestationRequirement = run {
                 val req = meta.keyAttestationRequirement.toDomain()
-                require(req is KeyAttestationRequirement.Required)
-                req
+                req as? KeyAttestationRequirement.Required
             },
         )
         else -> ProofTypeMeta.Unsupported(type)

@@ -65,7 +65,7 @@ enum class ProofType : Serializable {
 sealed interface ProofTypeMeta : Serializable {
     data class Jwt(
         val algorithms: List<JWSAlgorithm>,
-        override val keyAttestationRequirement: KeyAttestationRequirement,
+        override val keyAttestationRequirement: KeyAttestationRequirement?,
     ) : ProofTypeMeta, HasKeyAttestationRequirement {
         init {
             require(algorithms.isNotEmpty()) { "Supported algorithms in case of JWT cannot be empty" }
@@ -78,7 +78,7 @@ sealed interface ProofTypeMeta : Serializable {
 
     data class Attestation(
         val algorithms: List<JWSAlgorithm>,
-        override val keyAttestationRequirement: KeyAttestationRequirement.Required,
+        override val keyAttestationRequirement: KeyAttestationRequirement.Required?,
     ) : ProofTypeMeta, HasKeyAttestationRequirement {
         init {
             require(algorithms.isNotEmpty()) { "Supported algorithms in case of Attestation cannot be empty" }
@@ -89,7 +89,7 @@ sealed interface ProofTypeMeta : Serializable {
 }
 
 interface HasKeyAttestationRequirement {
-    val keyAttestationRequirement: KeyAttestationRequirement
+    val keyAttestationRequirement: KeyAttestationRequirement?
 }
 
 sealed interface KeyAttestationRequirement {
