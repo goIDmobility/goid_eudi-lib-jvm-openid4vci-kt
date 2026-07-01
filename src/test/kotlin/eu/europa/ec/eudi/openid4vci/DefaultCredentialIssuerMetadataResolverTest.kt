@@ -342,10 +342,10 @@ internal class DefaultCredentialIssuerMetadataResolverTest {
     @Test
     internal fun `well-known path segment is appended always between the host component and the path component, if any`() = runTest {
         var id = CredentialIssuerId("https://issuer.example.com").getOrThrow()
-        assertEquals("https://issuer.example.com/.well-known/openid-credential-issuer", id.wellKnown().toString())
+        assertEquals("https://issuer.example.com/.well-known/openid-credential-issuer/", id.wellKnown().toString())
 
         id = CredentialIssuerId("https://issuer.example.com/tenant").getOrThrow()
-        assertEquals("https://issuer.example.com/.well-known/openid-credential-issuer/tenant", id.wellKnown().toString())
+        assertEquals("https://issuer.example.com/.well-known/openid-credential-issuer/tenant/", id.wellKnown().toString())
     }
 }
 

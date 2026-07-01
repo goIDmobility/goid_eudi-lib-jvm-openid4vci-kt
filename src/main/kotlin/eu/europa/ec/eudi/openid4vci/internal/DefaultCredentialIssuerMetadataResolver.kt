@@ -47,18 +47,18 @@ internal class DefaultCredentialIssuerMetadataResolver(
         policy: IssuerMetadataPolicy,
     ): Result<CredentialIssuerMetadata> = runCatching {
         val wellKnownUrl = issuer.wellKnownUrl("/.well-known/openid-credential-issuer")
-        val json = try {
-          httpClient.get(wellKnownUrl).body<String>()
+        try {
+            val json =  httpClient.get(wellKnownUrl).body<String>()
+            CredentialIssuerMetadataJsonParser.parseMetaData(json, issuer)
         } catch (t: Throwable) {
-            throw CredentialIssuerMetadataError.UnableToFetchCredentialIssuerMetadata(t)
+            val wellKnownUrl = issuer.wellKnownUrl("/.well-known/openid-credential-issuer", false)
+             try {
+                 val json =  httpClient.get(wellKnownUrl).body<String>()
+                 CredentialIssuerMetadataJsonParser.parseMetaData(json, issuer)
+             } catch (t: Throwable) {
+                throw t
+            }
         }
-
-        if(isNotJson(json)) {
-            throw CredentialIssuerMetadataError.UnableToFetchCredentialIssuerMetadata(IllegalArgumentException("Not a valid credential meta data"))
-        }
-
-
-        CredentialIssuerMetadataJsonParser.parseMetaData(json, issuer)
     }
 }
 
@@ -71,7 +71,7 @@ fun isNotJson(input: String): Boolean {
     }
 }
 
-private fun CredentialIssuerId.wellKnownUrl(wellKnownPath: String): Url {
+private fun CredentialIssuerId.wellKnownUrl(wellKnownPath: String, trailingSlash: Boolean = true): Url {
     val issuer = Url(this.value.value.toString())
     val pathSegment = buildString {
         append("/${wellKnownPath.removePrefixAndSuffix("/")}")
@@ -80,6 +80,7 @@ private fun CredentialIssuerId.wellKnownUrl(wellKnownPath: String): Url {
             append("/")
         }
         append(joinedSegments)
+        if (trailingSlash) append("/")
     }
 
     return URLBuilder(issuer).apply { path(pathSegment) }.build()
