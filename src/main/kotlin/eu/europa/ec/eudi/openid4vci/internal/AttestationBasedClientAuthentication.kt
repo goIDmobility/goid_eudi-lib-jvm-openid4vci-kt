@@ -27,6 +27,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.put
 import java.net.URL
 import java.time.Clock
+import java.time.temporal.ChronoUnit
 
 /**
  * Default implementation of [ClientAttestationPoPBuilder]
@@ -47,7 +48,7 @@ internal object DefaultClientAttestationPoPBuilder : ClientAttestationPoPBuilder
             jwtId = JwtId(JWTID().value),
             issuedAt = now,
             challenge = challenge,
-            notBefore = now,
+            expireTime = now.plus(5, ChronoUnit.MINUTES),
         )
         val signedJwt = popJwtSpec.signer.use { signOperation ->
             JwtSigner<ClientAttestationPOPClaims, JWK>(

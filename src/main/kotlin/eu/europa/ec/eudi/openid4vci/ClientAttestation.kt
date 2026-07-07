@@ -97,7 +97,7 @@ data class ClientAttestationPOPClaims(
     @SerialName(RFC7519.JWT_ID) @Required val jwtId: JwtId,
     @SerialName(RFC7519.ISSUED_AT) @Required @Serializable(with = NumericInstantSerializer::class) val issuedAt: Instant,
     @SerialName(AttestationBasedClientAuthenticationSpec.CHALLENGE_CLAIM) val challenge: Nonce? = null,
-    @SerialName(RFC7519.NOT_BEFORE) @Serializable(with = NumericInstantSerializer::class) val notBefore: Instant? = null,
+    @SerialName(RFC7519.EXPIRATION_TIME) @Serializable(with = NumericInstantSerializer::class) val expireTime: Instant? = null
 )
 
 //
